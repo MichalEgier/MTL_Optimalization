@@ -10,10 +10,12 @@ class Neural_Network:
                  hidden_layer_activation_function,
                  hidden_layer_activation_function_derivative,
                  layers_sizes=(784, 90, 10),
-                 learning_coeff=0.0005,
+                 learning_coeff=0.02,
                  weights_mean=0.0, weights_sigma=0.1, biases_mean=0.0, biases_sigma=0.1,
                  batch_size=25,
                  momentum_coefficient = 0.7,
+                 learning_coeffs_mode = "adagrad",
+                 adagrad_epsilon = 0.00000001,
                  name="default"
                  ):
 
@@ -23,6 +25,14 @@ class Neural_Network:
         self.output_layer_activation_function = softmax
         self.batch_size = batch_size
         self.momentum_coefficient = momentum_coefficient
+        self.learning_coeffs_mode = learning_coeffs_mode
+        self.adagrad_epsilon = adagrad_epsilon
+        self.weight_gradients = []  #for adagrad
+        for i in range(len(layers_sizes) - 1):
+            self.weight_gradients.append([])
+        self.bias_gradients = []    #for adagrad
+        for i in range(len(layers_sizes) - 1):
+            self.bias_gradients.append([])
 
         self.initialize_weights(weights_mean, weights_sigma, layers_sizes)
         self.initialize_biases(biases_mean, biases_sigma, layers_sizes)
@@ -30,15 +40,33 @@ class Neural_Network:
         self.name = name
 
 
+                    #tu jakos ten adagrad zrefaktoryzowac
     def initialize_weights(self, weights_mean, weights_sigma, layers_sizes):
         self.weights = []
+        if self.learning_coeffs_mode == "adagrad":
+            self.weights_learning_coefficients = []
+            self.weights_learning_coefficients_gradient_squares = []
         for i in range(len(layers_sizes) - 1):
             self.weights.append(np.random.normal(weights_mean, weights_sigma, size=(layers_sizes[i + 1], layers_sizes[i])))
+            if self.learning_coeffs_mode == "adagrad":
+                self.weights_learning_coefficients_gradient_squares.append(np.ones((layers_sizes[i+1], layers_sizes[i])))
+                #self.weights_learning_coefficients.append(np.ones((layers_sizes[i+1], layers_sizes[i])) * self.learning_coeff/math.sqrt(self.adagrad_epsilon)) #/ math.sqrt(self.adagrad_epsilon))
+                self.weights_learning_coefficients.append(np.ones((layers_sizes[i+1], layers_sizes[i])) * 0.0001) #/ math.sqrt(self.adagrad_epsilon))
+                #self.weights_learning_coefficients.append(np.ones((layers_sizes[i+1], layers_sizes[i])) * self.learning_coeff / math.sqrt(self.adagrad_epsilon)) #/ math.sqrt(self.adagrad_epsilon))
 
     def initialize_biases(self, biases_mean, biases_sigma, layers_sizes):
         self.biases = []
+        if self.learning_coeffs_mode == "adagrad":
+            self.biases_learning_coefficients = []
+            self.biases_learning_coefficients_gradient_squares = []
         for i in range(len(layers_sizes) - 1):
             self.biases.append(np.random.normal(biases_mean, biases_sigma, size=(layers_sizes[i + 1], 1)))
+            if self.learning_coeffs_mode == "adagrad":
+                self.biases_learning_coefficients_gradient_squares.append(np.ones((layers_sizes[i+1], 1)))
+                #self.biases_learning_coefficients.append(np.ones((layers_sizes[i+1], 1)) * self.learning_coeff / math.sqrt(self.adagrad_epsilon)) #/ math.sqrt(self.adagrad_epsilon))
+                self.biases_learning_coefficients.append(np.ones((layers_sizes[i+1], 1)) * 0.0001) #/ math.sqrt(self.adagrad_epsilon))
+                #self.biases_learning_coefficients.append(np.ones((layers_sizes[i+1], 1)) * self.learning_coeff / math.sqrt(self.weight_gradients + self.adagrad_epsilon)) #/ math.sqrt(self.adagrad_epsilon))
+
 
     def predict(self, X):
         y_predicted, _, _ = self.process_batch(X)
@@ -118,17 +146,34 @@ class Neural_Network:
     def _actualise_weights(self, deltas, a_vectors):
         actualisation_deltas = []   #for nesterow momentum
         for i in range(len(self.weights)):
-            actualisation_delta = -self.learning_coeff/self.batch_size * deltas[i].dot(a_vectors[i].T)
+            weight_gradient = deltas[i].dot(a_vectors[i].T)
+            if self.learning_coeffs_mode == "adagrad":
+                actualisation_delta = - self.weights_learning_coefficients[i]/self.batch_size * weight_gradient
+            else:
+                actualisation_delta = -self.learning_coeff/self.batch_size * weight_gradient
             self.weights[i] -= actualisation_delta
             actualisation_deltas.append(actualisation_delta)
+            if self.learning_coeffs_mode == "adagrad":
+                self.weight_gradients[i] = weight_gradient
+
+        if self.learning_coeffs_mode == "adagrad":
+            self._actualise_weights_learning_coefficients()
         return actualisation_deltas
 
     def _actualise_biases(self, deltas):
         actualisation_deltas = []   #for nesterow momentum
         for i in range(len(self.biases)):
-            actualisation_delta = -self.learning_coeff/self.batch_size * np.array([deltas[i].sum(axis=1)]).T
+            bias_gradient = np.array([deltas[i].sum(axis=1)]).T
+            if self.learning_coeffs_mode == "adagrad":
+                actualisation_delta = -self.biases_learning_coefficients[i]/self.batch_size * bias_gradient
+            else:
+                actualisation_delta = -self.learning_coeff/self.batch_size * bias_gradient
             self.biases[i] -= actualisation_delta
             actualisation_deltas.append(actualisation_delta)
+            if self.learning_coeffs_mode == "adagrad":
+                self.bias_gradients[i] = bias_gradient
+        if self.learning_coeffs_mode == "adagrad":
+            self._actualise_biases_learning_coefficients()
         return actualisation_deltas
 
     def _actualise_weights_momentum(self, deltas, a_vectors, last_actualisation_value):
@@ -161,6 +206,20 @@ class Neural_Network:
         for i in range(len(self.weights)):
             self.biases[i] -= last_actualisation_value[i] * self.momentum_coefficient
 
+    def _actualise_weights_learning_coefficients(self):
+        #print("Learning coeffs:")
+        #print(str(self.weights_learning_coefficients))
+
+        for i in range(len(self.weights_learning_coefficients)):
+            gradients = self.weight_gradients[i]
+            self.weights_learning_coefficients_gradient_squares[i] += gradients * gradients
+            self.weights_learning_coefficients[i] = self.learning_coeff / (np.sqrt(self.weights_learning_coefficients_gradient_squares[i] + self.adagrad_epsilon))
+
+    def _actualise_biases_learning_coefficients(self):
+        for i in range(len(self.biases_learning_coefficients)):
+            gradients = self.bias_gradients[i]
+            self.biases_learning_coefficients_gradient_squares[i] += gradients * gradients
+            self.biases_learning_coefficients[i] = self.learning_coeff / (np.sqrt(self.biases_learning_coefficients_gradient_squares[i] + self.adagrad_epsilon))
 
     def train_network(self, training_set_X, training_set_Y, test_set_X, test_set_Y, number_of_epochs):
 
@@ -168,10 +227,14 @@ class Neural_Network:
         accuraccies_in_training_set = []
         accuraccies_in_test_set= []
 
+        iter = 0
+
         for epoch in range(number_of_epochs):
             training_X_batches = np.array_split(training_set_X, int(len(training_set_X) / self.batch_size))
             training_Y_batches = np.array_split(training_set_Y, int(len(training_set_X) / self.batch_size))
             for Xi, Yi in zip(training_X_batches, training_Y_batches):
+                #print("Next batch = " + str(iter))
+                iter += 1
                 y_predicted, a_vectors, z_vectors = self.process_batch(Xi)
                 self.backward_propagation(y_predicted, Yi, a_vectors, z_vectors)
 
@@ -264,8 +327,19 @@ class Neural_Network:
 
 
 def softmax(X):
+    #print("Another iteration")
+    #print(str(X))
     nominator = np.exp(X.T)
     return (nominator / np.sum(nominator, axis=1).reshape(len(nominator), 1)).T
+
+def softmax_(X):
+    print("Another iteration")
+    print(str(X))
+    nominator_alt = np.exp(np.subtract(X.T,100000)) # for overflow error handling
+    toRet = (nominator_alt / np.sum(nominator_alt, axis=1).reshape(len(nominator_alt), 1)).T
+    print("To return")
+    print(str(toRet))
+    return toRet
 
 #softmax derivative not provided here - it is hard-coded in network class instead
 
@@ -297,11 +371,11 @@ def flatten(X):
 def run(network, number_of_epochs, mode="normal"):
     (train_X, train_y), (test_X, test_y) = mnist.load_data()
 
-    train_X = flatten(train_X )
-    test_X = flatten(test_X )
+    train_X = flatten(train_X[:5000])
+    test_X = flatten(test_X[:5000])
 
-    train_y = train_y.tolist()
-    test_y = test_y.tolist()
+    train_y = train_y.tolist()[:5000]
+    test_y = test_y.tolist()[:5000]
 
     iterator = 0
     while iterator < len(train_y):
@@ -441,5 +515,5 @@ def run_experiments_task_2():
         print(str(dic[key]))
 
 
-network1 = Neural_Network(relu, relu_prime, name="784 30 10", layers_sizes=(784, 30, 10))
-run(network1, 20, mode="momentum")
+network1 = Neural_Network(relu, relu_prime, name="784 50 10", layers_sizes=(784, 50, 10), batch_size=25)
+run(network1, 4000, mode="normal")
